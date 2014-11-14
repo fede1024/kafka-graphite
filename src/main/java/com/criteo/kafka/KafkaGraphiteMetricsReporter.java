@@ -27,7 +27,6 @@ public class KafkaGraphiteMetricsReporter implements KafkaMetricsReporter,
 
 	GraphiteReporter reporter = null;
     MetricPredicate predicate = MetricPredicate.ALL;
-    private ScheduledExecutorService executor;
 
 	boolean initialized = false;
 	boolean running = false;
@@ -40,7 +39,7 @@ public class KafkaGraphiteMetricsReporter implements KafkaMetricsReporter,
 	@Override
 	public synchronized void startReporter(long pollingPeriodSecs) {
 		if (initialized && !running) {
-			executor.scheduleAtFixedRate(reporter, pollingPeriodSecs, pollingPeriodSecs, TimeUnit.SECONDS);
+			reporter.start(pollingPeriodSecs, TimeUnit.SECONDS);
 			running = true;
 			LOG.info(String.format("Started Kafka Graphite metrics reporter with polling period %d seconds", pollingPeriodSecs));
 		}
@@ -49,7 +48,7 @@ public class KafkaGraphiteMetricsReporter implements KafkaMetricsReporter,
 	@Override
 	public synchronized void stopReporter() {
 		if (initialized && running) {
-			executor.shutdown();
+			reporter.shutdown();
 			running = false;
 			LOG.info("Stopped Kafka Graphite metrics reporter");
 			reporter = createReporter(graphiteHost, graphitePort, graphiteGroupPrefix, predicate);
@@ -71,8 +70,6 @@ public class KafkaGraphiteMetricsReporter implements KafkaMetricsReporter,
 			}
 
             LOG.debug("Initialize GraphiteReporter ["+graphiteHost+","+graphitePort+","+graphiteGroupPrefix+"]");
-
-            executor = Metrics.defaultRegistry().newScheduledThreadPool(1, "MetricReporter");
 
             if (regex != null)
             	predicate = new RegexMetricPredicate(regex);

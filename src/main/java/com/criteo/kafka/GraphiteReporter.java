@@ -2,7 +2,7 @@ package com.criteo.kafka;
 
 import com.yammer.metrics.Metrics;
 import com.yammer.metrics.core.*;
-import com.yammer.metrics.reporting.AbstractPollingReporter;
+import com.yammer.metrics.reporting.AbstractReporter;
 import com.yammer.metrics.reporting.SocketProvider;
 import com.yammer.metrics.stats.Snapshot;
 import com.yammer.metrics.core.MetricPredicate;
@@ -17,6 +17,7 @@ import java.net.Socket;
 import java.util.Locale;
 import java.util.Map.Entry;
 import java.util.SortedMap;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 
@@ -24,7 +25,7 @@ import java.util.concurrent.TimeUnit;
  * A simple reporter which sends out application metrics to a <a href="http://graphite.wikidot.com/faq">Graphite</a>
  * server periodically.
  */
-public class GraphiteReporter extends AbstractPollingReporter implements MetricProcessor<Long> {
+public class GraphiteReporter extends AbstractReporter implements MetricProcessor<Long>, Runnable {
     private static final Logger LOG = Logger.getLogger(GraphiteReporter.class);
     protected final String prefix;
     protected final MetricPredicate predicate;
@@ -33,7 +34,9 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
     protected final SocketProvider socketProvider;
     protected final VirtualMachineMetrics vm;
     protected Writer writer;
+    protected Socket socket = null;
     public boolean printVMMetrics = true;
+    private final ScheduledExecutorService executor;
 
     /**
      * Enables the graphite reporter to send data for the default metrics registry to graphite
@@ -185,9 +188,10 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
      * @throws IOException if there is an error connecting to the Graphite server
      */
     public GraphiteReporter(MetricsRegistry metricsRegistry, String prefix, MetricPredicate predicate, SocketProvider socketProvider, Clock clock, VirtualMachineMetrics vm, String name) throws IOException {
-        super(metricsRegistry, name);
+        super(metricsRegistry);
         this.socketProvider = socketProvider;
         this.vm = vm;
+        this.executor = metricsRegistry.newScheduledThreadPool(1, "graphite-reporter");
 
         this.clock = clock;
 
@@ -200,27 +204,38 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
         this.predicate = predicate;
     }
 
+    public void start(long period, TimeUnit unit) {
+        this.executor.scheduleAtFixedRate(this, period, period, unit);
+    }
+
+    public void shutdown() {
+        executor.shutdown();
+    }
+
     @Override
     public void run() {
-        Socket socket = null;
         int counter = 0;
+
         try {
-            socket = this.socketProvider.get();
+            if (!isConnected(socket)) {
+                closeConnection(socket);
+                socket = this.socketProvider.get();
+            }
             writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
 
             final long epoch = clock.time() / 1000;
             if (this.printVMMetrics) {
                 printVmMetrics(epoch);
             }
+            LOG.info("Sending metrics. Timestamp: " + epoch);
             counter = printRegularMetrics(epoch);
-            LOG.info(Integer.toString(counter) + " metrics sent");
-            writer.flush();
         } catch (Exception e) {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Error writing to Graphite", e);
             } else {
-                LOG.warn("Error writing to Graphite: ", e);
+                LOG.error("Error writing to Graphite: ", e);
             }
+        } finally {
             if (writer != null) {
                 try {
                     writer.flush();
@@ -228,20 +243,39 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
                     LOG.error("Error while flushing writer:", e1);
                 }
             }
-        } finally {
-            if (socket != null) {
-                try {
-                    socket.close();
-                } catch (IOException e) {
-                    LOG.error("Error while closing socket:", e);
-                }
+            LOG.info(Integer.toString(counter) + " metric groups sent.");
+        }
+    }
+
+    protected boolean isConnected(Socket socket) {
+        if (socket == null) {
+            return false;
+        }
+
+        // Sends a newline to test if the connection is open
+        try {
+            socket.getOutputStream().write("\n".getBytes());
+        } catch (IOException e) {
+            return false;
+        }
+
+        return true;
+    }
+
+    protected void closeConnection(Socket socket) {
+        if (socket != null) {
+            try {
+                socket.close();
+            } catch (IOException e) {
+                LOG.error("Error while closing socket:", e);
             }
-            writer = null;
         }
     }
 
     protected int printRegularMetrics(final Long epoch) {
-        int counter = 0;
+        int metricCounter = 0;
+        int failCounter = 0;
+
         for (Entry<String,SortedMap<MetricName,Metric>> entry : getMetricsRegistry().groupedMetrics(
                 predicate).entrySet()) {
             for (Entry<MetricName, Metric> subEntry : entry.getValue().entrySet()) {
@@ -249,43 +283,50 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
                 if (metric != null) {
                     try {
                         metric.processWith(this, subEntry.getKey(), epoch);
-                        counter++;
+                        metricCounter++;
                     } catch (Exception ignored) {
-                        LOG.error("Error printing regular metrics:", ignored);
+                        failCounter++;
+                        if (failCounter < 3) { // Don't flood the log with stack traces
+                            LOG.error("Error printing regular metrics:", ignored);
+                        }
                     }
+                }
+                else {
+                    LOG.info("Null metric: " + subEntry.getKey());
                 }
             }
         }
-        return counter;
+
+        if (failCounter != 0) {
+            LOG.error("Total failed metrics: " + failCounter);
+        }
+
+        return metricCounter;
     }
 
-    protected void sendInt(long timestamp, String name, String valueName, long value) {
+    protected void sendInt(long timestamp, String name, String valueName, long value) throws IOException {
         sendToGraphite(timestamp, name, valueName + " " + String.format(locale, "%d", value));
     }
 
-    protected void sendFloat(long timestamp, String name, String valueName, double value) {
+    protected void sendFloat(long timestamp, String name, String valueName, double value) throws IOException {
         sendToGraphite(timestamp, name, valueName + " " + String.format(locale, "%2.2f", value));
     }
 
-    protected void sendObjToGraphite(long timestamp, String name, String valueName, Object value) {
+    protected void sendObjToGraphite(long timestamp, String name, String valueName, Object value) throws IOException {
         sendToGraphite(timestamp, name, valueName + " " + String.format(locale, "%s", value));
     }
 
-    protected void sendToGraphite(long timestamp, String name, String value) {
-        try {
-            if (!prefix.isEmpty()) {
-                writer.write(prefix);
-            }
-            writer.write(sanitizeString(name));
-            writer.write('.');
-            writer.write(value);
-            writer.write(' ');
-            writer.write(Long.toString(timestamp));
-            writer.write('\n');
-            writer.flush();
-        } catch (IOException e) {
-            LOG.error("Error sending to Graphite:", e);
+    protected void sendToGraphite(long timestamp, String name, String value) throws IOException {
+        if (!prefix.isEmpty()) {
+            writer.write(prefix);
         }
+        writer.write(sanitizeString(name));
+        writer.write('.');
+        writer.write(value);
+        writer.write(' ');
+        writer.write(Long.toString(timestamp));
+        writer.write('\n');
+        writer.flush();
     }
 
     protected String sanitizeName(MetricName name) {
@@ -357,7 +398,7 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
         sendFloat(epoch, sanitizedName, "999percentile", snapshot.get999thPercentile());
     }
 
-    protected void printVmMetrics(long epoch) {
+    protected void printVmMetrics(long epoch) throws IOException {
         sendFloat(epoch, "jvm.memory", "heap_usage", vm.heapUsage());
         sendFloat(epoch, "jvm.memory", "non_heap_usage", vm.nonHeapUsage());
         for (Entry<String, Double> pool : vm.memoryPoolUsage().entrySet()) {
@@ -393,7 +434,12 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
 
         @Override
         public Socket get() throws Exception {
-            return new Socket(this.host, this.port);
+            LOG.info("Opening connection to: " + this.host + " " + this.port);
+            Socket s = new Socket(this.host, this.port);
+
+            s.setKeepAlive(true);
+
+            return s;
         }
 
     }
