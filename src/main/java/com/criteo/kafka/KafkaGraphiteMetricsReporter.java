@@ -81,7 +81,7 @@ public class KafkaGraphiteMetricsReporter implements KafkaMetricsReporter,
             if (props.getBoolean("kafka.graphite.metrics.reporter.enabled", false)) {
             	initialized = true;
             	startReporter(metricsConfig.pollingIntervalSecs());
-                LOG.debug("GraphiteReporter started.");
+                LOG.info("GraphiteReporter started.");
             }
         }
 	}
@@ -97,6 +97,7 @@ public class KafkaGraphiteMetricsReporter implements KafkaMetricsReporter,
 					predicate,
 					new GraphiteReporter.DefaultSocketProvider(graphiteHost, graphitePort),
 					Clock.defaultClock());
+			LOG.info(String.format("Create new graphite reporter to %s:%d", graphiteHost, graphitePort));
 		} catch (IOException e) {
 			LOG.error("Unable to initialize GraphiteReporter", e);
 		}
