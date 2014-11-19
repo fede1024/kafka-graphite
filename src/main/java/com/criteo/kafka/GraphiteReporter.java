@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit;
  * A simple reporter which sends out application metrics to a <a href="http://graphite.wikidot.com/faq">Graphite</a>
  * server periodically.
  */
-public class GraphiteReporter extends AbstractReporter implements MetricProcessor<Long>, Runnable {
+public class MyGraphiteReporter extends AbstractReporter implements MetricProcessor<Long>, Runnable {
     private static final Logger LOG = Logger.getLogger(GraphiteReporter.class);
     protected final String prefix;
     protected final MetricPredicate predicate;
