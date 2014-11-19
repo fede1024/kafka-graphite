@@ -2,6 +2,7 @@ package com.criteo.kafka;
 
 import com.yammer.metrics.Metrics;
 import com.yammer.metrics.core.*;
+import com.yammer.metrics.core.Timer;
 import com.yammer.metrics.reporting.AbstractReporter;
 import com.yammer.metrics.reporting.SocketProvider;
 import com.yammer.metrics.stats.Snapshot;
@@ -14,9 +15,8 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.lang.Thread.State;
 import java.net.Socket;
-import java.util.Locale;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.SortedMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -33,10 +33,9 @@ public class GraphiteReporter extends AbstractReporter implements MetricProcesso
     protected final Clock clock;
     protected final SocketProvider socketProvider;
     protected final VirtualMachineMetrics vm;
-    protected Writer writer;
-    protected Socket socket = null;
     public boolean printVMMetrics = true;
     private final ScheduledExecutorService executor;
+    private Queue<String> datapoints = null;
 
     /**
      * Enables the graphite reporter to send data for the default metrics registry to graphite
@@ -214,37 +213,57 @@ public class GraphiteReporter extends AbstractReporter implements MetricProcesso
 
     @Override
     public void run() {
+        Socket socket;
+        Writer writer = null;
         int counter = 0;
+        int connections = 0;
 
-        try {
-            if (!isConnected(socket)) {
-                closeConnection(socket);
+        datapoints = new LinkedList<String>();
+
+        final long epoch = clock.time() / 1000;
+        if (this.printVMMetrics) {
+            printVmMetrics(epoch);
+        }
+        printRegularMetrics(epoch);
+
+        LOG.info("Sending metrics. Timestamp: " + epoch);
+        while(!datapoints.isEmpty()) {
+            try {
                 socket = this.socketProvider.get();
-            }
-            writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
+                writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
 
-            final long epoch = clock.time() / 1000;
-            if (this.printVMMetrics) {
-                printVmMetrics(epoch);
-            }
-            LOG.info("Sending metrics. Timestamp: " + epoch);
-            counter = printRegularMetrics(epoch);
-        } catch (Exception e) {
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Error writing to Graphite", e);
-            } else {
+                for (int i = 0; i < 1000; i++, counter++) {
+                    String datapoint = datapoints.poll();
+
+                    if (datapoint == null) {
+                        break;
+                    }
+                    writer.write(datapoint);
+                }
+
+                connections++;
+
+            } catch (Exception e) {
                 LOG.error("Error writing to Graphite: ", e);
-            }
-        } finally {
-            if (writer != null) {
-                try {
-                    writer.flush();
-                } catch (IOException e1) {
-                    LOG.error("Error while flushing writer:", e1);
+                break; // Try again in next cycle
+            } finally {
+                if (writer != null) {
+                    try {
+                        writer.flush();
+                        writer.close();
+                    } catch (IOException e1) {
+                        LOG.error("Error while flushing writer:", e1);
+                    }
                 }
             }
-            LOG.info(Integer.toString(counter) + " metric groups sent.");
+
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                LOG.error("Error while sleeping.", e);
+            }
         }
+        LOG.info(Integer.toString(counter) + " datapoints sent in " + connections + " connections.");
     }
 
     protected boolean isConnected(Socket socket) {
@@ -265,7 +284,13 @@ public class GraphiteReporter extends AbstractReporter implements MetricProcesso
     protected void closeConnection(Socket socket) {
         if (socket != null) {
             try {
+                socket.getOutputStream().flush();
+            } catch (IOException e) {
+                LOG.error("Error while flushing socket:", e);
+            }
+            try {
                 socket.close();
+                LOG.info("Connection closed.");
             } catch (IOException e) {
                 LOG.error("Error while closing socket:", e);
             }
@@ -291,9 +316,9 @@ public class GraphiteReporter extends AbstractReporter implements MetricProcesso
                         }
                     }
                 }
-                else {
-                    LOG.info("Null metric: " + subEntry.getKey());
-                }
+                // else {
+                //     LOG.info("Null metric: " + subEntry.getKey());
+                // }
             }
         }
 
@@ -304,29 +329,32 @@ public class GraphiteReporter extends AbstractReporter implements MetricProcesso
         return metricCounter;
     }
 
-    protected void sendInt(long timestamp, String name, String valueName, long value) throws IOException {
+    protected void sendInt(long timestamp, String name, String valueName, long value) {
         sendToGraphite(timestamp, name, valueName + " " + String.format(locale, "%d", value));
     }
 
-    protected void sendFloat(long timestamp, String name, String valueName, double value) throws IOException {
+    protected void sendFloat(long timestamp, String name, String valueName, double value) {
         sendToGraphite(timestamp, name, valueName + " " + String.format(locale, "%2.2f", value));
     }
 
-    protected void sendObjToGraphite(long timestamp, String name, String valueName, Object value) throws IOException {
+    protected void sendObjToGraphite(long timestamp, String name, String valueName, Object value) {
         sendToGraphite(timestamp, name, valueName + " " + String.format(locale, "%s", value));
     }
 
-    protected void sendToGraphite(long timestamp, String name, String value) throws IOException {
+    protected void sendToGraphite(long timestamp, String name, String value) {
+        StringBuilder builder = new StringBuilder();
+
         if (!prefix.isEmpty()) {
-            writer.write(prefix);
+            builder.append(prefix);
         }
-        writer.write(sanitizeString(name));
-        writer.write('.');
-        writer.write(value);
-        writer.write(' ');
-        writer.write(Long.toString(timestamp));
-        writer.write('\n');
-        writer.flush();
+        builder.append(sanitizeString(name));
+        builder.append('.');
+        builder.append(value);
+        builder.append(' ');
+        builder.append(Long.toString(timestamp));
+        builder.append('\n');
+
+        datapoints.add(builder.toString());
     }
 
     protected String sanitizeName(MetricName name) {
@@ -347,17 +375,17 @@ public class GraphiteReporter extends AbstractReporter implements MetricProcesso
     }
 
     @Override
-    public void processGauge(MetricName name, Gauge<?> gauge, Long epoch) throws IOException {
+    public void processGauge(MetricName name, Gauge<?> gauge, Long epoch) {
         sendObjToGraphite(epoch, sanitizeName(name), "value", gauge.value());
     }
 
     @Override
-    public void processCounter(MetricName name, Counter counter, Long epoch) throws IOException {
+    public void processCounter(MetricName name, Counter counter, Long epoch) {
         sendInt(epoch, sanitizeName(name), "count", counter.count());
     }
 
     @Override
-    public void processMeter(MetricName name, Metered meter, Long epoch) throws IOException {
+    public void processMeter(MetricName name, Metered meter, Long epoch) {
         final String sanitizedName = sanitizeName(name);
         sendInt(epoch, sanitizedName, "count", meter.count());
         sendFloat(epoch, sanitizedName, "meanRate", meter.meanRate());
@@ -367,28 +395,28 @@ public class GraphiteReporter extends AbstractReporter implements MetricProcesso
     }
 
     @Override
-    public void processHistogram(MetricName name, Histogram histogram, Long epoch) throws IOException {
+    public void processHistogram(MetricName name, Histogram histogram, Long epoch) {
         final String sanitizedName = sanitizeName(name);
         sendSummarizable(epoch, sanitizedName, histogram);
         sendSampling(epoch, sanitizedName, histogram);
     }
 
     @Override
-    public void processTimer(MetricName name, Timer timer, Long epoch) throws IOException {
+    public void processTimer(MetricName name, Timer timer, Long epoch) {
         processMeter(name, timer, epoch);
         final String sanitizedName = sanitizeName(name);
         sendSummarizable(epoch, sanitizedName, timer);
         sendSampling(epoch, sanitizedName, timer);
     }
 
-    protected void sendSummarizable(long epoch, String sanitizedName, Summarizable metric) throws IOException {
+    protected void sendSummarizable(long epoch, String sanitizedName, Summarizable metric) {
         sendFloat(epoch, sanitizedName, "min", metric.min());
         sendFloat(epoch, sanitizedName, "max", metric.max());
         sendFloat(epoch, sanitizedName, "mean", metric.mean());
         sendFloat(epoch, sanitizedName, "stddev", metric.stdDev());
     }
 
-    protected void sendSampling(long epoch, String sanitizedName, Sampling metric) throws IOException {
+    protected void sendSampling(long epoch, String sanitizedName, Sampling metric) {
         final Snapshot snapshot = metric.getSnapshot();
         sendFloat(epoch, sanitizedName, "median", snapshot.getMedian());
         sendFloat(epoch, sanitizedName, "75percentile", snapshot.get75thPercentile());
@@ -398,7 +426,7 @@ public class GraphiteReporter extends AbstractReporter implements MetricProcesso
         sendFloat(epoch, sanitizedName, "999percentile", snapshot.get999thPercentile());
     }
 
-    protected void printVmMetrics(long epoch) throws IOException {
+    protected void printVmMetrics(long epoch) {
         sendFloat(epoch, "jvm.memory", "heap_usage", vm.heapUsage());
         sendFloat(epoch, "jvm.memory", "non_heap_usage", vm.nonHeapUsage());
         for (Entry<String, Double> pool : vm.memoryPoolUsage().entrySet()) {
@@ -434,7 +462,7 @@ public class GraphiteReporter extends AbstractReporter implements MetricProcesso
 
         @Override
         public Socket get() throws Exception {
-            LOG.info("Opening connection to: " + this.host + " " + this.port);
+            LOG.debug("Opening connection to: " + this.host + " " + this.port);
             Socket s = new Socket(this.host, this.port);
 
             s.setKeepAlive(true);

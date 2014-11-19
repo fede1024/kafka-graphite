@@ -1,7 +1,6 @@
 package com.criteo.kafka;
 
 import java.io.IOException;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import kafka.metrics.KafkaMetricsConfig;
