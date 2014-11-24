@@ -1,3 +1,8 @@
+/**
+ * This file was originally taken from the yammer metric library.
+ */
+
+
 package com.criteo.kafka;
 
 import com.yammer.metrics.Metrics;
