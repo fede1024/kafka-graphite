@@ -17,12 +17,15 @@ added to the normal wait interval, leading to missing data points in graphite.
 In this version `scheduleAtFixedRate` is used instead.
 2. Prefix: the prefix option allows to specify which metrics we want to export.
 3. Logging: logging on file is supported to check if the reporter is operating correctly.
+4. Limit metrics data: it is possible to set the reporter to export only the 'count' for
+   metrics of time 'meter', hiding mean, 1 minute mean etc. and reducing the amount
+   of data to graphite.
 
 Install On Broker
 -----------------
 
-1. Build the `kafka-graphite-1.1.2.jar` jar using `mvn package`.
-2. Add `kafka-graphite-1.1.2.jar` and `metrics-graphite-2.2.0.jar` to the `libs/`
+1. Build the `kafka-graphite-1.1.3.jar` jar using `mvn package`.
+2. Add `kafka-graphite-1.1.3.jar` and `metrics-graphite-2.2.0.jar` to the `libs/`
    directory of your kafka broker installation or to the classpath
 3. Configure the broker (see the configuration section below)
 4. Restart the broker
@@ -46,3 +49,4 @@ Here is a list of default properties used:
     # Only metrics matching with the pattern will be written to graphite.
     kafka.graphite.metrics.filter.regex="kafka.server":type="BrokerTopicMetrics",.*
     kafka.graphite.metrics.logFile=/var/log/kafka/graphite-reporter.log
+    kafka.graphite.metrics.hideMetersMeans=true

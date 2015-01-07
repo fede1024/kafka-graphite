@@ -40,6 +40,8 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
     protected Writer writer;
     public boolean printVMMetrics = true;
 
+    private boolean hideMetersMeans = false; // Export all data by default
+
     /**
      * Enables the graphite reporter to send data for the default metrics registry to graphite
      * server with the specified period.
@@ -205,6 +207,18 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
         this.predicate = predicate;
     }
 
+    public void setHideMetersMeans(boolean value){
+        this.hideMetersMeans = value;
+    }
+
+    public void start(long period, TimeUnit unit) {
+        this.executor.scheduleAtFixedRate(this, period, period, unit);
+    }
+
+    public void shutdown() {
+        executor.shutdown();
+    }
+
     @Override
     public void run() {
         Socket socket = null;
@@ -324,10 +338,12 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
     public void processMeter(MetricName name, Metered meter, Long epoch) throws IOException {
         final String sanitizedName = sanitizeName(name);
         sendInt(epoch, sanitizedName, "count", meter.count());
-        sendFloat(epoch, sanitizedName, "meanRate", meter.meanRate());
-        sendFloat(epoch, sanitizedName, "1MinuteRate", meter.oneMinuteRate());
-        sendFloat(epoch, sanitizedName, "5MinuteRate", meter.fiveMinuteRate());
-        sendFloat(epoch, sanitizedName, "15MinuteRate", meter.fifteenMinuteRate());
+        if (!hideMetersMeans) {
+            sendFloat(epoch, sanitizedName, "meanRate", meter.meanRate());
+            sendFloat(epoch, sanitizedName, "1MinuteRate", meter.oneMinuteRate());
+            sendFloat(epoch, sanitizedName, "5MinuteRate", meter.fiveMinuteRate());
+            sendFloat(epoch, sanitizedName, "15MinuteRate", meter.fifteenMinuteRate());
+        }
     }
 
     @Override
