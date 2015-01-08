@@ -22,6 +22,7 @@ import java.net.Socket;
 import java.util.Locale;
 import java.util.Map.Entry;
 import java.util.SortedMap;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 
@@ -39,6 +40,7 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
     protected final VirtualMachineMetrics vm;
     protected Writer writer;
     public boolean printVMMetrics = true;
+    private final ScheduledExecutorService executor;
 
     private boolean hideMetersMeans = false; // Export all data by default
 
@@ -195,6 +197,7 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
         super(metricsRegistry, name);
         this.socketProvider = socketProvider;
         this.vm = vm;
+        this.executor = metricsRegistry.newScheduledThreadPool(1, "graphite-reporter");
 
         this.clock = clock;
 
