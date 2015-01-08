@@ -1,8 +1,8 @@
 Kafka Graphite Metrics Reporter
 ==============================
 
-This is a simple reporter for kafka using the 
-[GraphiteReporter](http://metrics.codahale.com/manual/graphite/). It works with 
+This is a simple reporter for kafka using the
+[GraphiteReporter](http://metrics.codahale.com/manual/graphite/). It works with
 kafka 0.8.1.1 version.
 
 About this fork
@@ -24,8 +24,8 @@ In this version `scheduleAtFixedRate` is used instead.
 Install On Broker
 -----------------
 
-1. Build the `kafka-graphite-1.1.3.jar` jar using `mvn package`.
-2. Add `kafka-graphite-1.1.3.jar` and `metrics-graphite-2.2.0.jar` to the `libs/`
+1. Build the `kafka-graphite-1.1.5.jar` jar using `mvn package`.
+2. Add `kafka-graphite-1.1.5.jar` and `metrics-graphite-2.2.0.jar` to the `libs/`
    directory of your kafka broker installation or to the classpath
 3. Configure the broker (see the configuration section below)
 4. Restart the broker
